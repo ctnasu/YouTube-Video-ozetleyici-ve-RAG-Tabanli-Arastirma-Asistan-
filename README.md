@@ -1,4 +1,4 @@
-# 🎥 YouTube Video Özetleyici ve RAG Tabanlı Araştırma Asistanı
+<img width="1440" height="815" alt="Ekran Resmi 2026-10-07 17 10 15" src="https://github.com/user-attachments/assets/5a9b44d1-8131-439b-951b-92dbd2593751" /># 🎥 YouTube Video Özetleyici ve RAG Tabanlı Araştırma Asistanı
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.37.1-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
@@ -11,6 +11,14 @@
 Herhangi bir YouTube videosunun transkriptini çıkaran, çok adımlı prompt mühendisliğiyle akademik derinlikte bir özet üreten ve videoya dair soruları **RAG (Retrieval-Augmented Generation)** mimarisiyle, kaynak alıntılı olarak yanıtlayan, tamamen yerel çalışan bir Streamlit uygulaması.
 
 Tüm çıkarım (inference) [Ollama](https://ollama.com/) üzerinden, kullanıcının kendi makinesinde yapılır — hiçbir transkript, soru veya yanıt üçüncü taraf bir API'ye gönderilmez.
+
+<img width="1440" height="811" alt="Ekran Resmi 2026-10-07 17 05 06" src="https://github.com/user-attachments/assets/7e262668-af40-4db2-8e09-3ad99a146ed3" />
+
+<img width="1440" height="807" alt="Ekran Resmi 2026-10-07 17 14 04" src="https://github.com/user-attachments/assets/16cc1166-4ebb-4ca3-ae00-a79d8cd1e609" />
+
+<img width="1440" height="815" alt="Ekran Resmi 2026-10-07 17 10 15" src="https://github.com/user-attachments/assets/a1ae247e-6c38-4ce4-afce-344aa5a399ba" />
+
+<img width="1440" height="811" alt="Ekran Resmi 2026-10-07 17 05 51" src="https://github.com/user-attachments/assets/adc5aa51-65ae-4ddc-9ea1-8cbe0d4a5ec1" />
 
 ---
 
