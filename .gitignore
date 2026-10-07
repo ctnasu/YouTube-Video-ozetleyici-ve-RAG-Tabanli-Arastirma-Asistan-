@@ -1,0 +1,22 @@
+# Sanal ortam
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Vektör veritabanı (her makinede yeniden oluşturulur)
+chroma_db/
+
+# Ortam / sır dosyaları
+.env
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+
+# Çalışma zamanı debug/çıktı dosyaları
+out.json
