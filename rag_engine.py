@@ -2,11 +2,16 @@
 RAG Motoru — Geliştirilmiş Versiyon
 - Küçük chunk'lar (500 char), cümle sınırlarına duyarlı
 - Metadata desteği (chunk_index, source_video, start_time)
-- Skor tabanlı arama (relevance threshold)
+- Skor tabanlı arama (relevance threshold), gerçek dedup
+- Her video kendi koleksiyonunda — çoklu video desteği
 - Singleton client mimarisi
 """
 
 import os
+import time
+import shutil
+import hashlib
+import sqlite3
 import warnings
 import logging
 
@@ -31,15 +36,15 @@ from typing import Optional
 import chromadb
 warnings.filterwarnings("ignore")
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
 
 # ─── YAPILANDIRMA ───
 CHROMA_PATH = "chroma_db"
-COLLECTION_NAME = "youtube_rag"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
 RELEVANCE_THRESHOLD = 0.3  # Bu skorun altındaki sonuçlar filtrelenir
+MAX_COLLECTIONS = 15       # chroma_db'nin sınırsız büyümesini önlemek için basit bir üst sınır
 
 # Cümle sınırlarına saygılı ayırıcılar (öncelik sırasıyla)
 SEPARATORS = ["\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " "]
@@ -65,17 +70,82 @@ def _get_embeddings():
     return _embeddings_model
 
 
+def _make_collection_name(source_key: str) -> str:
+    """source_key'den (video URL'si veya başlığı) sabit/deterministik bir koleksiyon adı üretir."""
+    digest = hashlib.sha1(source_key.encode("utf-8")).hexdigest()[:16]
+    return f"yt_{digest}"
+
+
+def _purge_orphaned_segment_dirs():
+    """
+    Bu chromadb sürümünde (0.5.5) delete_collection() segment klasörlerini
+    diskten silmeyebiliyor (bilinen bir davranış) — sqlite'daki geçerli segment
+    id'leriyle eşleşmeyen artık klasörleri fiziksel olarak temizler.
+    """
+    db_file = os.path.join(CHROMA_PATH, "chroma.sqlite3")
+    if not os.path.exists(db_file):
+        return
+    try:
+        con = sqlite3.connect(db_file)
+        valid_ids = {row[0] for row in con.execute("SELECT id FROM segments")}
+        con.close()
+    except Exception:
+        return
+    try:
+        entries = os.listdir(CHROMA_PATH)
+    except Exception:
+        return
+    for name in entries:
+        path = os.path.join(CHROMA_PATH, name)
+        if os.path.isdir(path) and name not in valid_ids:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def _cleanup_old_collections(client, keep: int = MAX_COLLECTIONS):
+    """MAX_COLLECTIONS'ı aşan en eski koleksiyonları siler (chroma_db'nin sınırsız birikmesini önler)."""
+    try:
+        collections = client.list_collections()
+    except Exception:
+        return
+    if len(collections) > keep:
+        collections.sort(key=lambda c: (c.metadata or {}).get("created_at", 0))
+        for col in collections[: len(collections) - keep]:
+            try:
+                client.delete_collection(col.name)
+            except Exception:
+                pass
+    _purge_orphaned_segment_dirs()
+
+
 def create_vector_db(text: str, video_title: str = "Video",
-                     timestamps: Optional[list] = None):
+                     timestamps: Optional[list] = None,
+                     source_key: Optional[str] = None) -> str:
     """
     Metni parçalara ayırır, vektörleştirir ve ChromaDB'ye kaydeder.
+    Her video kendi koleksiyonunda saklanır (diğer videoların verisi silinmez).
+    Aynı source_key ile daha önce işlenmiş bir video varsa yeniden embed edilmez.
 
     Args:
         text: Video transkript metni
         video_title: Video başlığı (metadata için)
         timestamps: Opsiyonel zaman damgalı parçalar listesi
                     [{"start": 10.5, "text": "...", "duration": 3.2}, ...]
+        source_key: Videoyu tekilleştiren anahtar (URL önerilir). Verilmezse
+                    video_title kullanılır.
+
+    Dönüş: collection_name — search_in_db()'ye geçirilmesi gereken koleksiyon adı.
     """
+    client = _get_chroma_client()
+    collection_name = _make_collection_name(source_key or video_title)
+
+    # Video zaten indekslenmişse yeniden embed etme
+    try:
+        client.get_collection(collection_name)
+        print(f"   ↺ '{video_title}' zaten indeksli, önbellekten kullanılıyor.")
+        return collection_name
+    except Exception:
+        pass
+
     print(f"1. Metin parçalanıyor (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})...")
 
     text_splitter = RecursiveCharacterTextSplitter(
@@ -109,30 +179,32 @@ def create_vector_db(text: str, video_title: str = "Video",
 
     print("2. Vektörleştirme ve ChromaDB'ye kaydetme...")
 
-    client = _get_chroma_client()
     embeddings = _get_embeddings()
 
-    # Var olan koleksiyonu temizle
-    try:
-        client.delete_collection(COLLECTION_NAME)
-    except Exception:
-        pass
-
-    vector_db = Chroma.from_texts(
+    Chroma.from_texts(
         texts=chunks,
         embedding=embeddings,
         client=client,
-        collection_name=COLLECTION_NAME,
+        collection_name=collection_name,
         metadatas=metadatas,
+        # Varsayılan (L2) yerine cosine mesafesi: skor hesaplamasını
+        # keyfi bir sabite (distance/800) değil, gerçek bir ilgi ölçüsüne dayandırır.
+        collection_metadata={"hnsw:space": "cosine", "created_at": time.time()},
     )
 
+    _cleanup_old_collections(client)
+
     print(f"   ✓ Veritabanı başarıyla oluşturuldu ({len(chunks)} chunk).")
-    return vector_db
+    return collection_name
 
 
-def search_in_db(query: str, k: int = 3) -> list:
+def search_in_db(query: str, collection_name: str, k: int = 3) -> list:
     """
     Kullanıcının sorusuna en yakın k adet metin parçasını bulur.
+    Alakasız (threshold altı) ve neredeyse birebir aynı (duplicate) sonuçlar elenir.
+
+    Args:
+        collection_name: create_vector_db()'nin döndürdüğü koleksiyon adı.
 
     Dönüş: [{"content": "...", "score": 0.85, "metadata": {...}}, ...]
     """
@@ -141,20 +213,19 @@ def search_in_db(query: str, k: int = 3) -> list:
 
     vector_db = Chroma(
         client=client,
-        collection_name=COLLECTION_NAME,
+        collection_name=collection_name,
         embedding_function=embeddings,
     )
 
-    # Ham mesafe tabanlı arama (düşük mesafe = daha ilgili)
-    results_with_scores = vector_db.similarity_search_with_score(query, k=k)
+    # Dedup/threshold sonrası k'nın altına düşmemek için fazladan aday çek
+    fetch_k = min(k * 4, 20)
+    results_with_scores = vector_db.similarity_search_with_score(query, k=fetch_k)
 
-    # Mesafeyi 0-1 arasında ilgililik skoruna çevir
-    # Cosine distance: 0 = tam eşleşme, büyük değer = farklı
+    # Koleksiyon cosine mesafesiyle oluşturulduğu için (create_vector_db bkz.)
+    # cosine_distance = 1 - cosine_similarity ⇒ relevance = 1 - distance
     formatted = []
     for doc, distance in results_with_scores:
-        # Basit dönüşüm: score = max(0, 1 - distance/1000)
-        # Pratikte nomic-embed distance'lar genelde 200-600 arasında
-        relevance = max(0.0, min(1.0, 1.0 - (distance / 800)))
+        relevance = max(0.0, min(1.0, 1.0 - distance))
         formatted.append({
             "content": doc.page_content,
             "score": round(relevance, 3),
@@ -164,15 +235,30 @@ def search_in_db(query: str, k: int = 3) -> list:
     # Skora göre sırala (yüksek = daha ilgili)
     formatted.sort(key=lambda x: x["score"], reverse=True)
 
-    return formatted if formatted else [{"content": "İlgili sonuç bulunamadı.", "score": 0, "metadata": {}}]
+    # Alakasız sonuçları ele
+    formatted = [r for r in formatted if r["score"] >= RELEVANCE_THRESHOLD]
+
+    # Neredeyse aynı chunk'ları tekilleştir (ilk 80 karaktere göre)
+    seen_prefixes = set()
+    deduped = []
+    for r in formatted:
+        prefix = r["content"][:80].strip().lower()
+        if prefix in seen_prefixes:
+            continue
+        seen_prefixes.add(prefix)
+        deduped.append(r)
+
+    deduped = deduped[:k]
+
+    return deduped if deduped else [{"content": "İlgili sonuç bulunamadı.", "score": 0, "metadata": {}}]
 
 
-def search_in_db_simple(query: str, k: int = 3) -> list[str]:
+def search_in_db_simple(query: str, collection_name: str, k: int = 3) -> list[str]:
     """
     Geriye uyumlu basit arama — sadece metin listesi döner.
     (Eski app.py uyumluluğu için)
     """
-    results = search_in_db(query, k=k)
+    results = search_in_db(query, collection_name, k=k)
     return [r["content"] for r in results]
 
 
@@ -213,17 +299,17 @@ if __name__ == "__main__":
     print("RAG MOTORU TESTİ — Geliştirilmiş Versiyon")
     print("=" * 60)
 
-    create_vector_db(ornek_metin, video_title="Test Videosu")
+    col_name = create_vector_db(ornek_metin, video_title="Test Videosu", source_key="test-videosu")
 
     print("\n3. Arama testi...")
-    results = search_in_db("RAG mimarisi ne işe yarar?", k=3)
+    results = search_in_db("RAG mimarisi ne işe yarar?", col_name, k=3)
     for i, r in enumerate(results, 1):
         print(f"\n--- Sonuç {i} (skor: {r['score']}) ---")
         print(f"Metadata: {r['metadata']}")
         print(f"İçerik: {r['content'][:150]}...")
 
     print("\n4. Basit arama testi (geriye uyumlu)...")
-    simple = search_in_db_simple("Büyük dil modeli nedir?", k=2)
+    simple = search_in_db_simple("Büyük dil modeli nedir?", col_name, k=2)
     for i, text in enumerate(simple, 1):
         print(f"\nSonuç {i}: {text[:100]}...")
 

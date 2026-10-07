@@ -36,8 +36,8 @@ class TestFormatTimestamp:
         assert ft.format_timestamp(65) == "01:05"
 
     def test_over_an_hour_worth_of_seconds(self):
-        # format_timestamp yalnızca MM:SS formatlar; 61 dakika 01 saniye şeklinde taşar.
-        assert ft.format_timestamp(3661) == "61:01"
+        # 1 saat ve üzeri süreler H:MM:SS formatına geçer.
+        assert ft.format_timestamp(3661) == "1:01:01"
 
     def test_fractional_seconds_are_truncated(self):
         assert ft.format_timestamp(65.9) == "01:05"
