@@ -1,4 +1,4 @@
-<img width="1440" height="815" alt="Ekran Resmi 2026-10-07 17 10 15" src="https://github.com/user-attachments/assets/5a9b44d1-8131-439b-951b-92dbd2593751" /># 🎥 YouTube Video Özetleyici ve RAG Tabanlı Araştırma Asistanı
+# 🎥 YouTube Video Özetleyici ve RAG Tabanlı Araştırma Asistanı
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.37.1-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
